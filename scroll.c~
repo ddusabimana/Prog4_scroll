@@ -1,7 +1,7 @@
 //
 //  main.c
 //  cos350_Prog4
-//  Created by Daniel Dusabimana and Samuel Capotosto on 4/1/16.
+//  Created by Daniel Dusabimana on 4/1/16.
 //  Copyright (c) 2016 danieldusabimana. All rights reserved.
 //
 #include <errno.h>
@@ -11,12 +11,15 @@
 #include <sys/ioctl.h>
 //.
 #define FILE_BUFF_SZ (8 * 1024 * 1024) //.8 MB Buffer for File I/O
-
+//.
+//.
+//.
 int clearPrompt(int);
 int togglesttyraw(int);
 int printPrompt(char *, char *, int);
-
-
+//.
+//.
+//.
 int main(int argc, char ** argv)
 {
   FILE * fpInput;
