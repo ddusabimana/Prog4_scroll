@@ -1,181 +1,272 @@
-//
-//  main.c
-//  cos350_Prog4
-//  Created by Daniel Dusabimana and Samuel Capotosto on 4/1/16.
-//  Copyright (c) 2016 danieldusabimana. All rights reserved.
-//
-#include <errno.h>
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <sys/types.h>
 #include <sys/ioctl.h>
-//.
-#define FILE_BUFF_SZ (8 * 1024 * 1024) //.8 MB Buffer for File I/O
+#include <sys/time.h>
+#include <curses.h>
+#include <termios.h>
+#include <signal.h>
+#include <string.h>
+#include <unistd.h>
 
-int clearPrompt(int);
-int togglesttyraw(int);
-int printPrompt(char *, char *, int);
+#define TRUE 1
+#define FALSE 0
 
+void scrollHandler();
+void scrollFile();
+void scrollLines(int lines);
+void refreshTimer();
+void refreshScreen();
+void printScreen();
+void clearScreen();
+void echoOff();
+void echoOn();
 
+//Let's define global variables
+int termHeight;
+int termWidth;
+int currentLine;
+int totalLines;
+//Boolean to see if we are scrolling? 0 is false 1 is true
+int isScrolling;
+double scrollSpeed;
+
+//The file to read from
+FILE * input;
+
+struct termios originalInfo;
+struct itimerval timer;
+
+//Quit the program
+void quitScroll()
+{
+  echoOff();
+  echoOn();
+  clearScreen();
+  //close the file
+  fclose(input);
+  exit(0);
+}
+/*kill signal handler*/
+void sigHandler(int sigNum)
+{
+  quitScroll();
+}
+void scrollHandler()
+{
+  if(isScrolling)
+    {
+      echoOn();
+      scrollLines(1);
+      refreshScreen();
+      fflush(stdout);
+      echoOff();
+    }
+}
+void installHandlers()
+{
+
+  /* Install timer_handler as the signal handler for SIGALRM. */
+  if (signal(SIGALRM, (void (*)(int)) scrollHandler) == SIG_ERR) {
+    perror("Unable to catch SIGALRM");
+    quitScroll();
+  }
+  signal(SIGINT, sigHandler);
+}
 int main(int argc, char ** argv)
 {
-  FILE * fpInput;
-  FILE * fpOutput;
-  char * pBuff;
-  char * strInput;
-  char * strPrompt;
-  char * buffFileIn;
-  char * strPromptFull;
-  int nW, nX, nY, nZ;
-  int nRet, nRows, nRowsX, nCols, nByts;
-  struct winsize win_size;
-  //.
-  nRows = 25;
-  nCols = 80;
-  nW = nX = nY = nZ = nRet = nByts = 0;
-  //.
-  //.-------------------------------------------------------------------------
-  //.
-  if((nRet = ioctl(1, TIOCGWINSZ, &win_size)) != 0) {
-    printf("\ncall to ioctl failed : %d [ %s ]", errno, strerror(errno));
-    return(0);
-  }
-  else {
-    nRows = win_size.ws_row;
-    nCols = win_size.ws_col;
-    printf("\nRows : %d, Cols : %d\n", nRows, nCols);
-        
-  }
-  //.
-  if(argc > 1) {
-    strInput = argv[1];
-    if((fpInput = fopen(argv[1], "r")) == NULL) {
-      printf("\nmymore - could not open input file : %s", argv[1]);
-      printf("\nErrNum : %d : [ %s ]\n", errno, strerror(errno));
+  //Get the terminal height and width
+  struct winsize w;
+  ioctl(0, TIOCGWINSZ, &w);
+  termHeight = w.ws_row-1;
+  termWidth = w.ws_col;
+
+  //Set up the terminal so that long lines truncate as opposed to wrapping
+  fputs("\033[?7l", stdout);
+
+  //Catch the all signals
+  installHandlers();
+
+  //Set the default scroll speed to 2 seconds (2000ms) per line
+  scrollSpeed = 2000.0;
+  refreshTimer();
+  totalLines = 400;
+
+  //Handle the error that the file does not exist
+  if(argc == 2)
+    {
+      printf("Opening File '%s'\n", argv[1]);
+      //Open the file and handle the error that the file does not exist
+      input = fopen(argv[1], "r");
+      if(input != NULL)
+        {
+          scrollFile(input);
+        }
+      else
+        {
+          perror("File does not exist!\n");
+          exit(EXIT_FAILURE);
+        }
     }
-  }
-  else {
-    fpInput = stdin;
-  }
-  //.
-  fpOutput = stdout;
-  nRowsX = nRows - 1;
-  strPrompt = (char *)malloc(nCols * sizeof(char));
-  memset(strPrompt, 0x00, nCols);
-  strPromptFull = (char *)malloc(nCols * sizeof(char));
-  memset(strPromptFull, 0x00, nCols);
-  //.
-  //.-------------------------------------------------------------------------
-  //.
-  strcpy(strPrompt, "my-more : ");
-  strcat(strPrompt, argv[1]);
-  buffFileIn = (char *)malloc(FILE_BUFF_SZ * sizeof(char));
-  memset(buffFileIn, 0x00, FILE_BUFF_SZ);
-  nByts = (int)fread(buffFileIn, sizeof(char), FILE_BUFF_SZ, fpInput);
-  pBuff = buffFileIn;
-  while((pBuff - buffFileIn) < nByts) {
-    for(nX = 0; nX < nRowsX; nX++) {
-      for(nY = 0; nY < nCols; nY++) {
-	fwrite(pBuff, sizeof(char), 1, fpOutput);
-	if(*pBuff == '\n') {
-	  pBuff++;
-	  break;
-	}
-	pBuff++;
-      }
+  else if (argc == 1)
+    {
+      //if we just type the command, assume we're reading from stdin
+      printf("Reading from standard input\n");
+      //Open the file and handle the error that the file does not exist
+      input = stdin;
+      scrollFile(input);
     }
-    printPrompt(strPrompt, strPromptFull, nCols);
-    //.togglesttyraw(1);
-    nRet = getchar();
-    //.togglesttyraw(0);
-    clearPrompt(nRet);
-    if(nRet == ' ') {
-      //.Scroll Forward by a Page
+  else
+    {
+      perror("Too many/too few arguments!\n");
+      exit(EXIT_FAILURE);
     }
-    else if(nRet == '\n') {
-      //.
-      //.Toggle Auto-Scroll On-or-Off
-      //.
-    }
-  }
-  //.
-  //.-------------------------------------------------------------------------
-  //.
-  if(fpInput) {
-    fclose(fpInput);
-  }
-  if(fpOutput) {
-    fclose(fpOutput);
-  }
-  if(buffFileIn) {
-    free(buffFileIn);
-  }
-  if(strPrompt) {
-    free(strPrompt);
-  }
-  if(strPromptFull) {
-    free(strPromptFull);
-  }
+
 }
 
-
-int printPrompt(char * strInput, char * strBuff, int nCols)
+void scrollFile()
 {
-  int nLen, nRem;
-  //.
-  nLen = nRem = 0;
-  //.
-  //.printf("\033[7m\033[1m"); //.Reverse Video
-  printf("\033[7;32m");
-  nLen = strlen(strInput);
-  nRem = nCols - nLen;
-  memset(strBuff, 0x00, nCols);
-  strcpy(strBuff, strInput);
-  memset(strBuff + nLen, 0x20, nRem);
-  printf("%s", strBuff);
-  printf("\033[0m\033[0K");
-  //.
-  return(1);
+  //First, clear the screen
+  clearScreen();
+  //Main program logic
+  while(1)
+    {
+      refreshScreen();
+      echoOff();
+      int c;
+      c = getchar();
+      if(c == 'q')
+        {
+          //Quit the program
+          quitScroll();
+        }
+      else if (c == ' ')
+        {
+          //Skip to the next screenful
+          //termHeight for screenful
+          scrollLines(termHeight);
+        }
+      else if(c == '\n')
+        {
+          //toggle auto scrolling
+          isScrolling = !isScrolling;
+        }
+      else if (c == 's')
+        {
+          //Slower by 20%
+          scrollSpeed *= 1.25;
+          refreshTimer();
+        }
+      else if (c == 'f')
+        {
+          scrollSpeed *= .8;
+          refreshTimer();
+        }
+      echoOn();
+    }
 }
-
-
-int clearPrompt(int nRet)
+void scrollLines (int amount)
 {
-  int nLen, nRem;
-  //.
-  nLen = nRem = 0;
-  //.
-  if(nRet == '\n') {
-    printf("\033[A");
-    printf("\033[0K");
-  }
-  else if(nRet == ' ') {
-    printf("\033[A");
-    printf("\033[0K");
-  }
-  //.
-  return(nRet);
+  currentLine += amount;
+  if(currentLine > totalLines-termHeight)
+    {
+      if(totalLines - termHeight < 0)
+        {
+          currentLine = 0;
+        }
+      else
+        {
+          currentLine = totalLines-termHeight;
+        }
+    }
 }
-
-
-int togglesttyraw(int bRaw)
+void refreshTimer()
 {
-  //.
-  //.Hack - Probably should be using stty -g
-  //.
-  if(bRaw) {
-    system("/bin/stty raw");
-    return(1);
+  //Set the timer to the scrollTime
+  if(scrollSpeed > 1000)
+    {
+      timer.it_value.tv_sec = scrollSpeed/1000;
+      timer.it_value.tv_usec = 0;
+    }
+  else
+    {
+      timer.it_value.tv_sec = 0;
+      timer.it_value.tv_usec = (int)scrollSpeed*1000;
+    }
+
+  timer.it_interval = timer.it_value;
+  /* Start a virtual timer. It counts down whenever this process is
+     executing. */
+  if (setitimer(ITIMER_REAL, &timer, NULL) == -1) {
+    perror("error calling setitimer()");
+    quitScroll();
   }
-  else {
-    system("/bin/stty -raw");
-    return(0);
-  }
-  return(1);
 }
-//.
-//. Src - /Users/petitmadjima/Desktop/USM/Spring2016/COS_350_SystemsProgramming/cos350_Prog4/cos350_Prog4
-//. Bin - /Users/petitmadjima/Library/Developer/Xcode/DerivedData/cos350_Prog4-cvfpaqveeanteaexvbjbaekfvhwu/Build/Products/Debug
-//. Cmd - ./cos350_Prog4 test.txt
-//.
-/* - E N D - */
+void refreshScreen()
+{
+  clearScreen();
+  printScreen();
+}
+void printScreen()
+{
+  //Write all the lines to the screen
+  /*unsigned int i;
+  for(i = 0; i < termHeight; i++)
+    {
+      //old for testing
+      //printf("Testing Full Screen %d\n", i + currentLine);
+      int actualLine;
+      actualLine = i+currentLine;
+      }*/
+  int count = 0;
+  int lines = 0;
+  char line[256]; /* or other suitable maximum line size */
+  while (fgets(line, sizeof line, input) != NULL) /* read a line */
+    {
+      if (count >= currentLine && count < currentLine+termHeight)
+        {
+          //print the line
+          printf("%s", line);
+          lines++;
+        }
+      count++;
+    }
+  //reset the file
+  rewind(input);
+  while(lines < termHeight)
+    {
+      printf("\n");
+      lines++;
+    }
+
+  //And now, print out the program controls
+  //Reverse video for pretty formatting
+  fputs("\033[7m", stdout);
+  printf("Controls: SPACE - Page down, ENTER - Toggle auto-scroll, f - Faster 20%%, s - Slower 20%%, q - Quit, Scroll speed = %fms, autoScroll = %d", scrollSpeed, isScrolling);
+  fputs("\033[0m", stdout);
+  fflush(stdout);
+}
+void clearScreen()
+{
+  //Clear the screen
+  fputs("\033[2J",stdout);
+  //Move the cursor to the top left
+  fputs("\033[1;1H",stdout);
+}
+void echoOff()
+{
+  struct termios info;
+  tcgetattr(0,&info);    //get attribs
+  info.c_lflag &= ~(ICANON | ECHO) ;    //turn off echo bit
+  tcsetattr(0,TCSANOW,&info);   //set attribs
+
+}
+void echoOn()
+{
+
+  struct termios info;
+  tcgetattr(0,&info);    //get attribs
+  info.c_lflag |= (ICANON | ECHO) ;    //turn off echo bit
+  tcsetattr(0,TCSANOW,&info);   //set attribs
+}
