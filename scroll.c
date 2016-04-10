@@ -415,7 +415,7 @@ void exitProgram(int retCode) //.Quit the program
     exit(retCode);
 }
 
-
+/*
 void printDebugStr(const char * strDebug)
 {
     int nX;
@@ -467,3 +467,4 @@ void printTestStr()
     fputs(strDebugMsg, stdout);
     fflush(stdout);
 }
+*/
